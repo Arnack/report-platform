@@ -7,6 +7,13 @@ FILE_STORAGE_PATH = os.getenv("FILE_STORAGE_PATH", "/app/files")
 
 router = APIRouter(prefix="/api", tags=["downloads"])
 
+# MIME types for different formats
+MIME_TYPES = {
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'pdf': 'application/pdf',
+    'csv': 'text/csv',
+}
+
 
 @router.get("/runs/{run_id}/download")
 async def download_report(run_id: uuid.UUID):
@@ -33,9 +40,11 @@ async def download_report(run_id: uuid.UUID):
             raise HTTPException(status_code=404, detail="Report file not found")
         
         filename = os.path.basename(run.file_path)
+        extension = filename.rsplit('.', 1)[-1] if '.' in filename else 'xlsx'
+        media_type = MIME_TYPES.get(extension, 'application/octet-stream')
         
         return FileResponse(
             path=run.file_path,
             filename=filename,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            media_type=media_type,
         )

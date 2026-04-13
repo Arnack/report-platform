@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Table, Button, Badge, Alert, Pagination, Container, Row, Col } from 'react-bootstrap';
 import { FaDownload, FaSync } from 'react-icons/fa';
 import { formatDistanceToNow } from 'date-fns';
-import { getRuns, downloadReport } from './api';
+import { getRuns, downloadReport, subscribeToRunStatus } from './api';
 
 function RunsList() {
   const [runs, setRuns] = useState([]);
@@ -11,9 +11,16 @@ function RunsList() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const limit = 20;
+  const subscriptionsRef = useRef(new Map());
 
   useEffect(() => {
     loadRuns();
+    
+    return () => {
+      // Cleanup all subscriptions
+      subscriptionsRef.current.forEach((unsubscribe) => unsubscribe());
+      subscriptionsRef.current.clear();
+    };
   }, [page]);
 
   const loadRuns = async () => {
@@ -23,6 +30,31 @@ function RunsList() {
       setRuns(data.runs);
       setTotal(data.total);
       setLoading(false);
+      
+      // Subscribe to SSE for pending/running items
+      data.runs.forEach((run) => {
+        if (
+          (run.status === 'pending' || run.status === 'running') &&
+          !subscriptionsRef.current.has(run.id)
+        ) {
+          const unsubscribe = subscribeToRunStatus(run.id, (updateData) => {
+            // Update the run in the list
+            setRuns((prevRuns) =>
+              prevRuns.map((r) =>
+                r.id === run.id
+                  ? { ...r, status: updateData.status, completed_at: updateData.completed_at, file_path: updateData.file_path, error_message: updateData.error_message }
+                  : r
+              )
+            );
+            
+            // Unsubscribe when terminal
+            if (updateData.status === 'completed' || updateData.status === 'failed') {
+              subscriptionsRef.current.delete(run.id);
+            }
+          });
+          subscriptionsRef.current.set(run.id, unsubscribe);
+        }
+      });
     } catch (err) {
       setError('Failed to load report runs');
       setLoading(false);

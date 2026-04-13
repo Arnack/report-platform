@@ -14,8 +14,11 @@ export const getReports = async () => {
   return response.data;
 };
 
-export const runReport = async (reportId, params = {}) => {
-  const response = await api.post(`/api/reports/${reportId}/run`, { params });
+export const runReport = async (reportId, params = {}, outputFormat = 'xlsx') => {
+  const response = await api.post(`/api/reports/${reportId}/run`, { 
+    params,
+    output_format: outputFormat,
+  });
   return response.data;
 };
 
@@ -31,6 +34,31 @@ export const getRun = async (runId) => {
 
 export const downloadReport = (runId) => {
   window.open(`${API_URL}/api/runs/${runId}/download`, '_blank');
+};
+
+export const subscribeToRunStatus = (runId, onStatusUpdate) => {
+  /**
+   * Subscribe to real-time status updates via SSE.
+   * Returns an unsubscribe function.
+   */
+  const eventSource = new EventSource(`${API_URL}/api/runs/${runId}/stream`);
+  
+  eventSource.addEventListener('status_update', (event) => {
+    const data = JSON.parse(event.data);
+    onStatusUpdate(data);
+    
+    // Auto-close when terminal state
+    if (data.status === 'completed' || data.status === 'failed') {
+      eventSource.close();
+    }
+  });
+  
+  eventSource.onerror = (error) => {
+    console.error('SSE connection error:', error);
+    eventSource.close();
+  };
+  
+  return () => eventSource.close();
 };
 
 export default api;

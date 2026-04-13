@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, and_
 from typing import List
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from models.database import get_db
 from models.report_run import ReportRun
@@ -14,7 +14,7 @@ from schemas.report import (
     ReportRunListResponse,
     ReportStatus,
 )
-from reports.registry import get_all_reports, get_report_generator
+from reports.registry import get_all_reports, get_report_generator, get_available_formats
 from tasks.report_tasks import generate_report_task
 
 router = APIRouter(prefix="/api", tags=["reports"])
@@ -24,15 +24,18 @@ router = APIRouter(prefix="/api", tags=["reports"])
 async def list_available_reports():
     """List all available report types."""
     reports = get_all_reports()
-    return [
-        ReportInfo(
+    result = []
+    for r in reports:
+        formats = get_available_formats(r.id)
+        info = ReportInfo(
             id=r.id,
             name=r.name,
             description=r.description,
             params_schema=r.params_schema,
+            available_formats=formats,
         )
-        for r in reports
-    ]
+        result.append(info)
+    return result
 
 
 @router.post("/reports/{report_id}/run", response_model=ReportRunResponse, status_code=202)
@@ -44,15 +47,48 @@ async def run_report(
     """Trigger report generation (async)."""
     # Validate report type
     try:
-        generator = get_report_generator(report_id)
+        output_format = request.output_format or "xlsx"
+        generator = get_report_generator(report_id, output_format)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     
-    # Create run record
+    params = request.params or {}
+    cache_ttl = request.cache_ttl_seconds or 0
+    
+    # Check cache: look for completed run with same params within TTL
+    if cache_ttl > 0:
+        cutoff_time = datetime.utcnow() - timedelta(seconds=cache_ttl)
+        cache_query = select(ReportRun).where(
+            and_(
+                ReportRun.report_type == report_id,
+                ReportRun.status == ReportStatus.COMPLETED.value,
+                ReportRun.created_at >= cutoff_time,
+                ReportRun.params == params,
+            )
+        ).order_by(desc(ReportRun.created_at)).limit(1)
+        
+        result = await db.execute(cache_query)
+        cached_run = result.scalar_one_or_none()
+        
+        if cached_run:
+            # Return cached result
+            return ReportRunResponse(
+                id=cached_run.id,
+                report_type=cached_run.report_type,
+                status=ReportStatus(cached_run.status),
+                params=cached_run.params,
+                created_at=cached_run.created_at,
+                completed_at=cached_run.completed_at,
+                file_path=cached_run.file_path,
+                error_message=cached_run.error_message,
+                cached=True,
+            )
+    
+    # Create new run record
     run = ReportRun(
         report_type=report_id,
         status=ReportStatus.PENDING.value,
-        params=request.params or {},
+        params=params,
     )
     db.add(run)
     await db.commit()
@@ -62,7 +98,8 @@ async def run_report(
     generate_report_task.delay(
         run_id=str(run.id),
         report_type=report_id,
-        params=request.params or {},
+        params=params,
+        output_format=output_format,
     )
     
     return ReportRunResponse(
@@ -74,6 +111,7 @@ async def run_report(
         completed_at=run.completed_at,
         file_path=run.file_path,
         error_message=run.error_message,
+        cached=False,
     )
 
 

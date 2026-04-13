@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Row, Col, Card, Button, Modal, Form, Alert, Badge } from 'react-bootstrap';
 import { FaPlay, FaInfoCircle } from 'react-icons/fa';
-import { getReports, runReport } from './api';
+import { getReports, runReport, subscribeToRunStatus } from './api';
 
 function Dashboard() {
   const [reports, setReports] = useState([]);
@@ -10,11 +10,20 @@ function Dashboard() {
   const [showModal, setShowModal] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
   const [reportParams, setReportParams] = useState({});
+  const [outputFormat, setOutputFormat] = useState('xlsx');
   const [running, setRunning] = useState(false);
   const [success, setSuccess] = useState(null);
+  const [liveStatus, setLiveStatus] = useState(null);
+  const unsubscribeRef = useRef(null);
 
   useEffect(() => {
     loadReports();
+    
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
   }, []);
 
   const loadReports = async () => {
@@ -31,6 +40,7 @@ function Dashboard() {
   const handleRunReport = (report) => {
     setSelectedReport(report);
     setReportParams({});
+    setOutputFormat(report.available_formats?.[0] || 'xlsx');
     setSuccess(null);
     setShowModal(true);
   };
@@ -38,13 +48,29 @@ function Dashboard() {
   const handleSubmit = async () => {
     try {
       setRunning(true);
-      const result = await runReport(selectedReport.id, reportParams);
-      setSuccess(`Report "${selectedReport.name}" started successfully! Run ID: ${result.id}`);
-      setRunning(false);
-      setTimeout(() => {
-        setShowModal(false);
-        setSuccess(null);
-      }, 2000);
+      setLiveStatus(null);
+      const result = await runReport(selectedReport.id, reportParams, outputFormat);
+      setSuccess(`Report "${selectedReport.name}" started!`);
+      
+      // Subscribe to real-time status updates via SSE
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+      unsubscribeRef.current = subscribeToRunStatus(result.id, (data) => {
+        setLiveStatus(data.status);
+        if (data.status === 'completed') {
+          setSuccess(`Report "${selectedReport.name}" completed successfully!`);
+          setRunning(false);
+          setTimeout(() => {
+            setShowModal(false);
+            setSuccess(null);
+            setLiveStatus(null);
+          }, 2000);
+        } else if (data.status === 'failed') {
+          setError('Report generation failed: ' + (data.error_message || 'Unknown error'));
+          setRunning(false);
+        }
+      });
     } catch (err) {
       setError('Failed to start report generation');
       setRunning(false);
@@ -146,6 +172,22 @@ function Dashboard() {
         <Modal.Body>
           {success && <Alert variant="success">{success}</Alert>}
           {error && <Alert variant="danger">{error}</Alert>}
+          {liveStatus && liveStatus !== 'completed' && liveStatus !== 'failed' && (
+            <Alert variant="info">
+              <span className="loading-spinner me-2"></span>
+              Status: <strong>{liveStatus.toUpperCase()}</strong>
+            </Alert>
+          )}
+          {selectedReport && selectedReport.available_formats?.length > 1 && (
+            <Form.Group className="mb-3">
+              <Form.Label>Output Format</Form.Label>
+              <Form.Select value={outputFormat} onChange={(e) => setOutputFormat(e.target.value)}>
+                {selectedReport.available_formats.map((format) => (
+                  <option key={format} value={format}>{format.toUpperCase()}</option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+          )}
           {selectedReport && renderParamsForm(selectedReport.params_schema)}
         </Modal.Body>
         <Modal.Footer>

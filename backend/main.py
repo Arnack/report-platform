@@ -6,6 +6,7 @@ import os
 from models.database import engine, Base
 from api.reports import router as reports_router
 from api.downloads import router as downloads_router
+from api.streams import router as streams_router
 
 
 @asynccontextmanager
@@ -36,6 +37,7 @@ app.add_middleware(
 # Include routers
 app.include_router(reports_router)
 app.include_router(downloads_router)
+app.include_router(streams_router)
 
 
 @app.get("/api/health")

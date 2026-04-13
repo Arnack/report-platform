@@ -18,4 +18,11 @@ celery_app.conf.update(
     task_track_started=True,
     task_time_limit=3600,  # 1 hour max runtime
     task_soft_time_limit=3000,  # 50 minutes soft limit
+    # Celery Beat schedule
+    beat_schedule={
+        "cleanup-old-files": {
+            "task": "tasks.cleanup_old_files",
+            "schedule": 3600.0,  # Every hour
+        },
+    },
 )

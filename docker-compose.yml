@@ -60,9 +60,26 @@ services:
       DATABASE_URL: postgresql://reports_user:reports_password@postgres:5432/reports
       REDIS_URL: redis://redis:6379/0
       FILE_STORAGE_PATH: /app/files
+      FILE_TTL_HOURS: "168"
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A tasks.celery_app beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql://reports_user:reports_password@postgres:5432/reports
+      REDIS_URL: redis://redis:6379/0
+      FILE_STORAGE_PATH: /app/files
+      FILE_TTL_HOURS: "168"
+    depends_on:
       redis:
         condition: service_healthy
 
